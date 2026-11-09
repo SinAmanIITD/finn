@@ -36,18 +36,23 @@ no service-to-service plumbing to debug).
 - **SQLite via Prisma** — zero-setup locally; swap `provider` to `postgresql` and point `DATABASE_URL`
   at Supabase (or any Postgres) for production with no schema changes.
 - **yahoo-finance2** — real end-of-day price/volume for NSE tickers (`.NS`).
-- **NSE's own public corporate-announcements API** — real filings, not mocked.
+- **NSE's own public corporate-announcements API** — real filings, not mocked, windowed to the last 30
+  days (without an explicit date range, NSE returns a symbol's *entire* history back to its listing —
+  tens of thousands of rows for an established company, almost all irrelevant to "what changed
+  recently").
 - **pdf-parse (pdfjs-dist)** — per-page text extraction from annual reports / transcripts, so every
   claim can cite a page number.
 - **Groq + OpenAI, multi-provider routing** (`src/lib/ai/provider.ts`) — **no restriction on models**
   was in the brief, so routing is split across providers, not just within one:
-  - **Groq** (`llama-3.1-8b-instant`) for the cheap/bulk tier — announcement classification, one-line
-    summaries. Groq's free tier is fast and effectively free, which is the point for high-volume,
-    low-ambiguity work.
+  - **Groq** (`openai/gpt-oss-20b`, a reasoning model, run at `reasoning_effort: "low"` so it doesn't
+    burn its token budget on hidden chain-of-thought) for the cheap/bulk tier — announcement
+    classification, one-line summaries. Groq's free tier is fast and effectively free, which is the
+    point for high-volume, low-ambiguity work.
   - **OpenAI** (`gpt-4o`) for the reasoning tier — research synthesis, guidance-vs-actuals, chat, where
     answer quality actually matters.
   - Both speak the OpenAI-compatible chat-completions API, so one SDK (`openai`) covers both; only the
-    `baseURL` differs.
+    `baseURL` differs. If one provider's call fails outright (quota, outage, a renamed/deprecated model),
+    `complete()` falls back to the other configured provider before ever degrading to demo mode.
 - **Retrieval with a built-in upgrade path** (`src/lib/ai/retrieval.ts`): OpenAI embeddings
   (`text-embedding-3-small`) + cosine similarity when `OPENAI_API_KEY` is set and chunks have been
   embedded, falling back automatically to a hand-rolled BM25 ranker otherwise. BM25 isn't a placeholder
