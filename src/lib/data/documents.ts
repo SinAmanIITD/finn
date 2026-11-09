@@ -1,4 +1,3 @@
-import { PDFParse } from "pdf-parse";
 import { db } from "@/lib/db";
 import { embedBatch, isEmbeddingConfigured } from "@/lib/ai/embeddings";
 
@@ -39,6 +38,12 @@ async function downloadPdf(url: string): Promise<Buffer> {
 }
 
 async function extractPdfPages(buffer: Buffer): Promise<PageText[]> {
+  // Lazy-imported: pdfjs-dist initializes canvas-related browser globals
+  // (DOMMatrix etc.) at module-evaluation time, which crashes in a
+  // serverless Node runtime without @napi-rs/canvas's native binary
+  // resolved. Importing it only here means routes that never parse a PDF
+  // (e.g. just listing documents) aren't dragged down by that import.
+  const { PDFParse } = await import("pdf-parse");
   const parser = new PDFParse({ data: buffer });
   try {
     const result = await parser.getText();
@@ -78,20 +83,22 @@ export async function ingestDocument(documentId: number): Promise<{ chunks: numb
     const chunks = chunkPages(pages);
     const embeddings = await embedTextsOrNull(chunks.map((c) => c.text));
 
+    // One bulk insert instead of one create() per chunk: against a pooled
+    // Postgres connection over the network, 1000+ individual round-trips in
+    // a single transaction took 60-120s and occasionally stalled outright.
+    // createMany is a single statement.
     await db.$transaction([
       db.documentChunk.deleteMany({ where: { documentId } }),
-      ...chunks.map((c, i) =>
-        db.documentChunk.create({
-          data: {
-            documentId,
-            companyId: doc.companyId,
-            pageNumber: c.pageNumber,
-            chunkIndex: c.chunkIndex,
-            text: c.text,
-            embedding: embeddings[i],
-          },
-        })
-      ),
+      db.documentChunk.createMany({
+        data: chunks.map((c, i) => ({
+          documentId,
+          companyId: doc.companyId,
+          pageNumber: c.pageNumber,
+          chunkIndex: c.chunkIndex,
+          text: c.text,
+          embedding: embeddings[i],
+        })),
+      }),
       db.document.update({ where: { id: documentId }, data: { status: "parsed" } }),
     ]);
 
