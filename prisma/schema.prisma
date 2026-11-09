@@ -1,0 +1,121 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Company {
+  id          Int      @id @default(autoincrement())
+  name        String
+  ticker      String   @unique // NSE symbol, e.g. RELIANCE
+  yahooSymbol String // e.g. RELIANCE.NS
+  exchange    String   @default("NSE")
+  sector      String
+  inPortfolio Boolean  @default(true) // false = ad-hoc/demo-only ticker, not a portfolio holding
+  createdAt   DateTime @default(now())
+
+  announcements    Announcement[]
+  stockPrices      StockPrice[]
+  documents        Document[]
+  financialMetrics FinancialMetric[]
+  researchReports  ResearchReport[]
+}
+
+model Announcement {
+  id               Int      @id @default(autoincrement())
+  companyId        Int
+  company          Company  @relation(fields: [companyId], references: [id])
+  category         String // results | M&A | fund_raise | management_change | litigation | insider_trading |
+  // earnings_call | investor_meetings | credit_rating | dividend | bonus_split | capex |
+  // press_release | postal_ballot | agm_egm | pledging | unclassified
+  title            String
+  summary          String?
+  importance       String // high | medium | low
+  announcementDate DateTime
+  sourceUrl        String?
+  rawText          String?
+  isMock           Boolean  @default(false) // true = seed/demo data, not a live NSE/BSE fetch
+  createdAt        DateTime @default(now())
+
+  @@index([companyId, announcementDate])
+}
+
+model StockPrice {
+  id        Int      @id @default(autoincrement())
+  companyId Int
+  company   Company  @relation(fields: [companyId], references: [id])
+  date      DateTime
+  open      Float
+  high      Float
+  low       Float
+  close     Float
+  volume    Float
+
+  @@unique([companyId, date])
+}
+
+model Document {
+  id           Int      @id @default(autoincrement())
+  companyId    Int
+  company      Company  @relation(fields: [companyId], references: [id])
+  documentType String // annual_report | concall_transcript
+  period       String? // e.g. "FY2026", "Q2 FY2027"
+  sourceUrl    String
+  localPath    String?
+  status       String   @default("pending") // pending | fetched | parsed | failed
+  createdAt    DateTime @default(now())
+
+  chunks DocumentChunk[]
+
+  @@index([companyId])
+}
+
+model DocumentChunk {
+  id         Int      @id @default(autoincrement())
+  documentId Int
+  document   Document @relation(fields: [documentId], references: [id])
+  companyId  Int // denormalized for fast per-company retrieval
+  pageNumber Int?
+  chunkIndex Int
+  text       String
+  createdAt  DateTime @default(now())
+
+  @@index([companyId])
+}
+
+model FinancialMetric {
+  id                Int      @id @default(autoincrement())
+  companyId         Int
+  company           Company  @relation(fields: [companyId], references: [id])
+  period            String // e.g. "Q2 FY2027"
+  periodType        String // quarter | annual
+  revenue           Float?
+  ebitda            Float?
+  pbt               Float?
+  pat               Float?
+  operatingCashFlow Float?
+  capex             Float?
+  totalDebt         Float?
+  totalEquity       Float?
+  unit              String   @default("INR crore") // never store a bare number without knowing the unit
+  sourceDocumentId  Int?
+  createdAt         DateTime @default(now())
+
+  @@unique([companyId, period])
+}
+
+model ResearchReport {
+  id          Int      @id @default(autoincrement())
+  companyId   Int
+  company     Company  @relation(fields: [companyId], references: [id])
+  sectionType String // business_snapshot | financial_snapshot | cash_quality | narrative_vs_numbers | guidance_vs_actuals
+  content     String // markdown
+  sourceRefs  String? // JSON array of { document, period, page }
+  model       String? // which LLM generated this ("demo" if no API key was configured)
+  createdAt   DateTime @default(now())
+
+  @@index([companyId, sectionType])
+}
