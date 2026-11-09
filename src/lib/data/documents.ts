@@ -4,15 +4,26 @@ import { embedBatch, isEmbeddingConfigured } from "@/lib/ai/embeddings";
 
 const EMBED_BATCH_SIZE = 96;
 
-/** Embeds texts in batches; returns null per-text if no OpenAI key is configured, so BM25 still works. */
+/**
+ * Embeds texts in batches; returns null per-text if no OpenAI key is
+ * configured, OR if the embeddings call itself fails (quota, outage, ...) -
+ * either way, BM25 retrieval still works on these chunks. A billing issue
+ * shouldn't fail document ingestion, which already did the real work of
+ * downloading and parsing the PDF.
+ */
 async function embedTextsOrNull(texts: string[]): Promise<(string | null)[]> {
   if (!isEmbeddingConfigured() || texts.length === 0) return texts.map(() => null);
-  const vectors: number[][] = [];
-  for (let i = 0; i < texts.length; i += EMBED_BATCH_SIZE) {
-    const batch = texts.slice(i, i + EMBED_BATCH_SIZE);
-    vectors.push(...(await embedBatch(batch)));
+  try {
+    const vectors: number[][] = [];
+    for (let i = 0; i < texts.length; i += EMBED_BATCH_SIZE) {
+      const batch = texts.slice(i, i + EMBED_BATCH_SIZE);
+      vectors.push(...(await embedBatch(batch)));
+    }
+    return vectors.map((v) => JSON.stringify(v));
+  } catch (e) {
+    console.error(`[embeddings] failed, falling back to BM25 for these chunks: ${(e as Error).message}`);
+    return texts.map(() => null);
   }
-  return vectors.map((v) => JSON.stringify(v));
 }
 
 type PageText = { num: number; text: string };
@@ -92,20 +103,26 @@ export async function ingestDocument(documentId: number): Promise<{ chunks: numb
 }
 
 /** Embeds any already-ingested chunks that predate OpenAI being configured. */
-export async function backfillMissingEmbeddings(): Promise<{ embedded: number }> {
+export async function backfillMissingEmbeddings(): Promise<{ embedded: number; error?: string }> {
   if (!isEmbeddingConfigured()) return { embedded: 0 };
 
   const missing = await db.documentChunk.findMany({ where: { embedding: null } });
   let embedded = 0;
   for (let i = 0; i < missing.length; i += EMBED_BATCH_SIZE) {
     const batch = missing.slice(i, i + EMBED_BATCH_SIZE);
-    const vectors = await embedBatch(batch.map((c) => c.text));
-    await db.$transaction(
-      batch.map((c, j) =>
-        db.documentChunk.update({ where: { id: c.id }, data: { embedding: JSON.stringify(vectors[j]) } })
-      )
-    );
-    embedded += batch.length;
+    try {
+      const vectors = await embedBatch(batch.map((c) => c.text));
+      await db.$transaction(
+        batch.map((c, j) =>
+          db.documentChunk.update({ where: { id: c.id }, data: { embedding: JSON.stringify(vectors[j]) } })
+        )
+      );
+      embedded += batch.length;
+    } catch (e) {
+      // Stop here and report what succeeded so far, rather than 500ing the
+      // whole backfill over e.g. a quota error partway through.
+      return { embedded, error: (e as Error).message };
+    }
   }
   return { embedded };
 }

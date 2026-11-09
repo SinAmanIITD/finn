@@ -18,7 +18,9 @@ const RULES: Array<{ pattern: RegExp; category: AnnouncementCategory }> = [
   { pattern: /acquisition|merger|demerger|scheme of arrangement|joint venture|stake (sale|purchase)/i, category: "M&A" },
   { pattern: /rights issue|qip|preferential allotment|buyback|commercial paper|fund.?rais/i, category: "fund_raise" },
   { pattern: /change in (director|key managerial|kmp)|resign|appoint.*\b(ceo|cfo|md|director)\b|cessation of/i, category: "management_change" },
-  { pattern: /litigation|lawsuit|regulatory order|penalty|fine impos|insolvency|nclt|restructuring/i, category: "litigation" },
+  // "restructuring" alone is too broad (ordinary business restructuring isn't litigation) -
+  // only treated as litigation when it's debt/insolvency restructuring specifically.
+  { pattern: /litigation|lawsuit|regulatory order|penalty|fine impos|insolvency|nclt|debt restructuring|insolvency.{0,20}restructuring/i, category: "litigation" },
   { pattern: /insider trading|sast|\bpit\b regulation/i, category: "insider_trading" },
   { pattern: /con\.? call|earnings call|concall|conference call/i, category: "earnings_call" },
   { pattern: /investor meet|analyst meet|institutional investor/i, category: "investor_meetings" },
@@ -76,7 +78,7 @@ export async function classifyAnnouncement(
     system: CLASSIFIER_SYSTEM,
     prompt: classifierPrompt(companyName, subject, description),
     model: MODELS.cheap,
-    maxTokens: 300,
+    maxTokens: 450, // headroom for the cheap tier's hidden reasoning tokens, even at low effort
   });
 
   if (data && (ANNOUNCEMENT_CATEGORIES as readonly string[]).includes(data.category)) {

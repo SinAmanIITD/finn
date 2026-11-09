@@ -68,12 +68,30 @@ export async function generateResearchSection(
     maxTokens: 1200,
   });
 
+  const sourceRefs = evidence.map((e) => ({ document: e.document, period: e.period, page: e.page }));
+
+  if (result.demo) {
+    // Every configured provider failed (quota, outage, deprecated model, ...) -
+    // degrade to demo mode with the real reason, rather than silently storing
+    // and returning an empty "successful" result.
+    return {
+      sectionType,
+      content:
+        `**Demo mode** (AI call failed: ${result.error ?? "unknown error"}): ${chunks.length} relevant ` +
+        `primary-source excerpts were retrieved for "${section.label}" but couldn't be synthesised. ` +
+        `Raw evidence is listed in sourceRefs below.`,
+      sourceRefs,
+      demo: true,
+      model: "demo",
+    };
+  }
+
   await db.researchReport.create({
     data: {
       companyId,
       sectionType,
       content: result.text,
-      sourceRefs: JSON.stringify(evidence.map((e) => ({ document: e.document, period: e.period, page: e.page }))),
+      sourceRefs: JSON.stringify(sourceRefs),
       model: result.model,
     },
   });
@@ -81,7 +99,7 @@ export async function generateResearchSection(
   return {
     sectionType,
     content: result.text,
-    sourceRefs: evidence.map((e) => ({ document: e.document, period: e.period, page: e.page })),
+    sourceRefs,
     demo: false,
     model: result.model,
   };
@@ -135,14 +153,20 @@ export async function answerQuestion(companyId: number, question: string): Promi
       evidence,
     }),
     model: MODELS.strong,
-    maxTokens: 900,
+    maxTokens: 1400, // structured answers (e.g. bull/bear) can run long; avoid truncating mid-point
   });
 
-  return {
-    answer: result.text,
-    sources: evidence.map((e) => ({ document: e.document, period: e.period, page: e.page })),
-    demo: false,
-  };
+  const sources = evidence.map((e) => ({ document: e.document, period: e.period, page: e.page }));
+
+  if (result.demo) {
+    return {
+      answer: `**Demo mode** (AI call failed: ${result.error ?? "unknown error"}): found ${chunks.length} relevant excerpts for "${question}" but couldn't answer from them.`,
+      sources,
+      demo: true,
+    };
+  }
+
+  return { answer: result.text, sources, demo: false };
 }
 
 export type GuidanceVsActualsItem = {
@@ -174,12 +198,22 @@ export async function generateGuidanceVsActuals(companyId: number): Promise<{
     .map((c, i) => `[${i + 1}] ${c.documentType}${c.period ? ` (${c.period})` : ""}, p.${c.pageNumber}\n${c.text}`)
     .join("\n\n---\n\n");
 
-  const { data } = await completeJSON<GuidanceVsActualsItem[]>({
+  const { data, demo } = await completeJSON<GuidanceVsActualsItem[] | Record<string, GuidanceVsActualsItem[]>>({
     system: GUIDANCE_VS_ACTUALS_SYSTEM,
     prompt: `Company: ${company.name} (${company.ticker})\n\nEVIDENCE:\n${evidenceBlock}`,
     model: MODELS.strong,
     maxTokens: 1600,
   });
 
-  return { items: data ?? [], demo: false };
+  return { items: coerceToItemArray(data), demo };
+}
+
+// Weaker/open models commonly wrap a requested JSON array in an object (e.g.
+// { "items": [...] }) despite instructions not to - defend against that
+// instead of silently dropping real results to an empty list.
+function coerceToItemArray(data: GuidanceVsActualsItem[] | Record<string, GuidanceVsActualsItem[]> | null): GuidanceVsActualsItem[] {
+  if (!data) return [];
+  if (Array.isArray(data)) return data;
+  const firstArray = Object.values(data).find((v) => Array.isArray(v));
+  return firstArray ?? [];
 }

@@ -65,5 +65,7 @@ Rules:
 - Use ONLY the evidence provided (transcripts for guidance, financial data for actuals).
 - Cite document and page for every guidance quote.
 - If no explicit numerical guidance was found in the evidence, say so clearly instead of fabricating one.
-- Return JSON: an array of objects with fields:
-  { metric, guidance, guidancePeriod, guidanceSource, target, actual, differencePct, managementComment, interpretation }`;
+- Return a JSON array directly at the top level - NOT wrapped in an object with a key like
+  "items" or "metrics". Each array element has fields:
+  { metric, guidance, guidancePeriod, guidanceSource, target, actual, differencePct, managementComment, interpretation }
+  If there is nothing to report, return an empty array: []`;

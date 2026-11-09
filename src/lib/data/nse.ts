@@ -37,10 +37,44 @@ export type NseAnnouncement = {
   attachmentUrl: string | null;
 };
 
-/** Fetches recent corporate announcements for a single NSE-listed symbol. */
-export async function fetchNseAnnouncements(symbol: string): Promise<NseAnnouncement[]> {
+function formatNseDate(d: Date): string {
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  return `${dd}-${mm}-${d.getFullYear()}`;
+}
+
+/**
+ * Fetches corporate announcements for a single NSE-listed symbol within a
+ * date window (default: the last 30 days). Without explicit from/to params,
+ * NSE's API returns that symbol's ENTIRE announcement history - for a company
+ * with a long listing history that's tens of thousands of rows, almost all
+ * irrelevant to a "what changed recently" push digest.
+ */
+export async function fetchNseAnnouncements(symbol: string, windowDays = 30): Promise<NseAnnouncement[]> {
+  try {
+    return await fetchOnce(symbol, windowDays, false);
+  } catch (e) {
+    // One retry with a forced-fresh cookie: a long-lived dev server can hold a
+    // cached session that NSE has since invalidated, and transient connection
+    // resets are common enough against a third-party API we don't control.
+    try {
+      return await fetchOnce(symbol, windowDays, true);
+    } catch (retryError) {
+      const first = describeError(e);
+      const second = describeError(retryError);
+      throw new Error(`NSE fetch failed twice for ${symbol}: [1] ${first} | [2] ${second}`);
+    }
+  }
+}
+
+async function fetchOnce(symbol: string, windowDays: number, forceFreshCookie: boolean): Promise<NseAnnouncement[]> {
+  if (forceFreshCookie) cachedCookie = null;
   const cookie = await getSessionCookie();
-  const url = `https://www.nseindia.com/api/corporate-announcements?index=equities&symbol=${encodeURIComponent(symbol)}`;
+  const toDate = new Date();
+  const fromDate = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
+  const url =
+    `https://www.nseindia.com/api/corporate-announcements?index=equities&symbol=${encodeURIComponent(symbol)}` +
+    `&from_date=${formatNseDate(fromDate)}&to_date=${formatNseDate(toDate)}`;
   const res = await fetch(url, { headers: { ...BROWSER_HEADERS, Cookie: cookie } });
   if (!res.ok) {
     throw new Error(`NSE API returned ${res.status} for ${symbol}`);
@@ -62,6 +96,12 @@ export async function fetchNseAnnouncements(symbol: string): Promise<NseAnnounce
     date: parseNseDate(d.an_dt).toISOString(),
     attachmentUrl: d.attchmntFile || null,
   }));
+}
+
+function describeError(e: unknown): string {
+  const err = e as Error & { cause?: unknown };
+  const cause = err.cause ? ` (cause: ${String(err.cause)})` : "";
+  return `${err.message}${cause}`;
 }
 
 function parseNseDate(s: string): Date {

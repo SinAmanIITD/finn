@@ -3,11 +3,17 @@
 // avoids dangerouslySetInnerHTML - everything renders through React elements.
 import type { ReactNode } from "react";
 
+// Matches **bold** before *italic* so a bold span isn't split into two
+// stray single-asterisk matches first - models vary on which they use for
+// emphasis (e.g. a label like "*FACTS*"), so both are handled.
 function renderInline(text: string, keyPrefix: string) {
-  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  const parts = text.split(/(\*\*[^*]+\*\*|\*[^*]+\*)/g);
   return parts.map((part, i) => {
     if (part.startsWith("**") && part.endsWith("**")) {
       return <strong key={`${keyPrefix}-${i}`}>{part.slice(2, -2)}</strong>;
+    }
+    if (part.startsWith("*") && part.endsWith("*") && part.length > 2) {
+      return <em key={`${keyPrefix}-${i}`}>{part.slice(1, -1)}</em>;
     }
     return <span key={`${keyPrefix}-${i}`}>{part}</span>;
   });
