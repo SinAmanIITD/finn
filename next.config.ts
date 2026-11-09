@@ -2,8 +2,14 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   /* config options here */
-  cacheComponents: true,
-  partialPrefetching: true,
+  // Left off deliberately: these experimental Next 16 flags (on by default
+  // from create-next-app) were implicated in a production-only bug where
+  // client pages using useSearchParams() (Research, Chat) got stuck on
+  // their loading state forever - the underlying fetches succeeded, but
+  // React state updates never reflected. Not worth the risk for an app
+  // that doesn't need partial prerendering.
+  // cacheComponents: true,
+  // partialPrefetching: true,
   // pdf-parse (via pdfjs-dist) spawns a worker from a path that doesn't
   // survive bundling - run it as a plain server-side Node dependency instead.
   serverExternalPackages: ["pdf-parse", "pdfjs-dist", "@napi-rs/canvas"],
