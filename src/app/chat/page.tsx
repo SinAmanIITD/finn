@@ -1,7 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 import { Send, Loader2 } from "lucide-react";
 import { MarkdownLite } from "@/components/MarkdownLite";
 import { cn } from "@/lib/cn";
@@ -22,9 +21,8 @@ const SUGGESTIONS = [
   "Give me the bull and bear case.",
 ];
 
-function ChatView() {
-  const searchParams = useSearchParams();
-  const [ticker, setTicker] = useState(searchParams.get("ticker") ?? "");
+export default function ChatPage() {
+  const [ticker, setTicker] = useState("");
   const [companies, setCompanies] = useState<Company[]>([]);
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
@@ -33,6 +31,11 @@ function ChatView() {
 
   useEffect(() => {
     fetch("/api/companies?portfolio=false").then((r) => r.json()).then((d) => setCompanies(d.companies));
+    // Read directly instead of useSearchParams(): on a cold production load
+    // that hook's hydration can resolve too late for a useState initializer
+    // to pick up, leaving the ticker unselected - see research/page.tsx.
+    const initial = new URLSearchParams(window.location.search).get("ticker");
+    if (initial) setTicker(initial);
   }, []);
 
   useEffect(() => {
@@ -156,13 +159,5 @@ function ChatView() {
         </button>
       </form>
     </div>
-  );
-}
-
-export default function ChatPage() {
-  return (
-    <Suspense fallback={<div className="px-4 pt-5 text-sm text-muted">Loading...</div>}>
-      <ChatView />
-    </Suspense>
   );
 }

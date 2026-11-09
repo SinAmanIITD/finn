@@ -1,7 +1,7 @@
 "use client";
 
-import { Suspense, useEffect, useState, useCallback } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useState, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { Search, Plus, FileText, Loader2 } from "lucide-react";
 import { PriceChip } from "@/components/PriceChip";
 import { MarkdownLite } from "@/components/MarkdownLite";
@@ -30,12 +30,10 @@ type GuidanceItem = {
   interpretation: string;
 };
 
-function ResearchView() {
+export default function ResearchPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const tickerParam = searchParams.get("ticker");
 
-  const [query, setQuery] = useState(tickerParam ?? "");
+  const [query, setQuery] = useState("");
   const [allCompanies, setAllCompanies] = useState<Company[]>([]);
   const [activeCompany, setActiveCompany] = useState<CompanyWithPrice | null>(null);
   const [loadingCompany, setLoadingCompany] = useState(false);
@@ -68,14 +66,25 @@ function ResearchView() {
   }, []);
 
   useEffect(() => {
-    if (tickerParam) {
-      setQuery(tickerParam);
-      loadCompany(tickerParam);
+    // Read the initial ticker directly from the URL instead of useSearchParams():
+    // on a cold/hard production load, that hook's hydration timing left this
+    // page stuck on "Loading company..." forever even though the underlying
+    // fetches succeeded - client-side navigation worked fine, only the first
+    // load of a URL with ?ticker= already in it didn't. Reading the URL
+    // directly on mount sidesteps that Suspense/hydration timing entirely.
+    const initial = new URLSearchParams(window.location.search).get("ticker");
+    if (initial) {
+      setQuery(initial);
+      loadCompany(initial);
     }
-  }, [tickerParam, loadCompany]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function selectTicker(ticker: string) {
-    router.push(`/research?ticker=${ticker.toUpperCase()}`);
+    const upper = ticker.toUpperCase();
+    router.push(`/research?ticker=${upper}`, { scroll: false });
+    setQuery(upper);
+    loadCompany(upper);
   }
 
   async function generateSection(section: ResearchSectionType) {
@@ -394,10 +403,3 @@ function GuidanceSection({
   );
 }
 
-export default function ResearchPage() {
-  return (
-    <Suspense fallback={<div className="px-4 pt-5 text-sm text-muted">Loading...</div>}>
-      <ResearchView />
-    </Suspense>
-  );
-}
