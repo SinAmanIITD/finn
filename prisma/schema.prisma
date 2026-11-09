@@ -3,8 +3,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL") // pooled connection (pgbouncer, port 6543) - used at runtime
+  directUrl = env("DIRECT_URL") // direct connection (port 5432) - used by `prisma db push`/`migrate` only, since the pooler's transaction mode doesn't support the session-level ops schema changes need
 }
 
 model Company {

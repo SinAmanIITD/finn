@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { getPriceSnapshot } from "@/lib/data/stockPrices";
+import { getPriceSnapshotsForCompanies } from "@/lib/data/stockPrices";
 
 export type DigestAnnouncement = {
   id: number;
@@ -56,9 +56,10 @@ export async function getDigest(windowHours = 24): Promise<Digest> {
   }));
 
   const companies = await db.company.findMany({ where: { inPortfolio: true } });
+  const snapshots = await getPriceSnapshotsForCompanies(companies.map((c) => c.id));
   const volumeAlerts: VolumeAlert[] = [];
   for (const c of companies) {
-    const snap = await getPriceSnapshot(c.id);
+    const snap = snapshots.get(c.id);
     if (snap?.isUnusualVolume) {
       volumeAlerts.push({
         companyName: c.name,
