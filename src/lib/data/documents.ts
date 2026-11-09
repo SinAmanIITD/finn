@@ -38,19 +38,16 @@ async function downloadPdf(url: string): Promise<Buffer> {
 }
 
 async function extractPdfPages(buffer: Buffer): Promise<PageText[]> {
-  // Lazy-imported: pdfjs-dist initializes canvas-related browser globals
-  // (DOMMatrix etc.) at module-evaluation time, which crashes in a
-  // serverless Node runtime without @napi-rs/canvas's native binary
-  // resolved. Importing it only here means routes that never parse a PDF
-  // (e.g. just listing documents) aren't dragged down by that import.
-  const { PDFParse } = await import("pdf-parse");
-  const parser = new PDFParse({ data: buffer });
-  try {
-    const result = await parser.getText();
-    return result.pages.map((p) => ({ num: p.num, text: p.text }));
-  } finally {
-    await parser.destroy();
-  }
+  // unpdf ships a self-contained, canvas-free PDF.js build made for
+  // serverless runtimes - unlike plain pdfjs-dist/pdf-parse, which
+  // initializes canvas-related browser globals at import time and crashed
+  // in Vercel's Node runtime regardless of how @napi-rs/canvas was wired in.
+  // We only ever need text, never rendering, so this sidesteps that
+  // dependency entirely instead of fighting its bundling.
+  const { getDocumentProxy, extractText } = await import("unpdf");
+  const doc = await getDocumentProxy(new Uint8Array(buffer));
+  const { text } = await extractText(doc, { mergePages: false });
+  return text.map((t, i) => ({ num: i + 1, text: t }));
 }
 
 export type TextChunk = { pageNumber: number; chunkIndex: number; text: string };
