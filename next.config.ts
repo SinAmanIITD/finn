@@ -13,6 +13,13 @@ const nextConfig: NextConfig = {
   // pdf-parse (via pdfjs-dist) spawns a worker from a path that doesn't
   // survive bundling - run it as a plain server-side Node dependency instead.
   serverExternalPackages: ["pdf-parse", "pdfjs-dist", "@napi-rs/canvas"],
+  // @napi-rs/canvas's native .node binary wasn't being traced into the
+  // serverless function bundle (pdfjs-dist loads it via a dynamic require
+  // that Vercel's static file-tracer misses), so PDF parsing crashed on
+  // DOMMatrix in production despite the dependency being installed. Force it in.
+  outputFileTracingIncludes: {
+    "/api/research/[ticker]/documents": ["./node_modules/@napi-rs/canvas/**/*"],
+  },
   turbopack: {
     rules: {
       "*.css": {
