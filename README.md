@@ -39,26 +39,27 @@ no service-to-service plumbing to debug).
 - **NSE's own public corporate-announcements API** — real filings, not mocked.
 - **pdf-parse (pdfjs-dist)** — per-page text extraction from annual reports / transcripts, so every
   claim can cite a page number.
-- **A hand-rolled BM25 ranker** (`src/lib/ai/retrieval.ts`) for retrieval — see "Why BM25, not
-  embeddings" below.
-- **Anthropic Claude** (`claude-haiku-5-5` for cheap/bulk classification, `claude-sonnet-5-5` for
-  research synthesis and guidance-vs-actuals) — smart model routing per the brief's efficiency bar.
-  **No restriction on models** was in the brief; this is simply the provider already in this toolchain.
-
-### Why BM25, not vector embeddings
-
-A "real" RAG pipeline usually means embeddings + a vector index. At this scale (a handful of documents
-per company), that would mean standing up a second API key/service for no measurable retrieval-quality
-gain. BM25 is a real, well-understood ranking function — not a placeholder — and it's what actually
-retrieves the evidence you see cited in the app. Swapping in pgvector + an embeddings model later is a
-drop-in change to one file (`retrieveRelevantChunks`), not a redesign.
+- **Groq + OpenAI, multi-provider routing** (`src/lib/ai/provider.ts`) — **no restriction on models**
+  was in the brief, so routing is split across providers, not just within one:
+  - **Groq** (`llama-3.1-8b-instant`) for the cheap/bulk tier — announcement classification, one-line
+    summaries. Groq's free tier is fast and effectively free, which is the point for high-volume,
+    low-ambiguity work.
+  - **OpenAI** (`gpt-4o`) for the reasoning tier — research synthesis, guidance-vs-actuals, chat, where
+    answer quality actually matters.
+  - Both speak the OpenAI-compatible chat-completions API, so one SDK (`openai`) covers both; only the
+    `baseURL` differs.
+- **Retrieval with a built-in upgrade path** (`src/lib/ai/retrieval.ts`): OpenAI embeddings
+  (`text-embedding-3-small`) + cosine similarity when `OPENAI_API_KEY` is set and chunks have been
+  embedded, falling back automatically to a hand-rolled BM25 ranker otherwise. BM25 isn't a placeholder
+  — it's what keeps the app fully functional with zero API keys configured — but the moment an OpenAI
+  key is added, retrieval quality upgrades with no other code changes.
 
 ## Data honesty
 
 - Every announcement and price point in the UI is live, not seeded — `isMock` exists on the schema for
   exactly the "label demo data clearly" requirement in the brief, but the default path never sets it.
 - Every research/chat answer either comes from real retrieved evidence + a real LLM call, or says
-  explicitly "demo mode (no ANTHROPIC_API_KEY set)" — it never fabricates confident-sounding analysis
+  explicitly "demo mode (no OPENAI_API_KEY set)" — it never fabricates confident-sounding analysis
   from nothing.
 - Classification never guesses: if a rule doesn't match and the AI response doesn't parse to one of the
   17 allowed categories, the announcement is left `unclassified` rather than assigned something invented.
@@ -80,12 +81,18 @@ polite client of a public API we don't control).
 
 ### Adding AI (optional but recommended)
 
-Without a key, the app runs end-to-end in a clearly-labelled demo mode: real data in, real retrieval,
-but no LLM synthesis. To see real classification/analysis:
+Without keys, the app runs end-to-end in a clearly-labelled demo mode: real data in, real BM25
+retrieval, but no LLM synthesis. Add either or both, in `.env`, yourself:
 
 ```
-ANTHROPIC_API_KEY=sk-ant-...   # in .env — get one at https://console.anthropic.com/settings/keys
+GROQ_API_KEY=...     # https://console.groq.com/keys — cheap/bulk tier (classification, summaries)
+OPENAI_API_KEY=...   # https://platform.openai.com/api-keys — reasoning tier (research, chat) + embeddings
 ```
+
+Adding only `OPENAI_API_KEY` still gets you real classification (it's just not routed to the cheap
+tier) plus real research/chat/embeddings — Groq is an optimisation, not a hard dependency. If you add
+`OPENAI_API_KEY` after documents are already ingested, backfill their embeddings once:
+`curl -X POST localhost:3000/api/research/backfill-embeddings`.
 
 ### Adding primary-source documents (Pull side)
 

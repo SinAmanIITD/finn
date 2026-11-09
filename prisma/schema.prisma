@@ -81,6 +81,7 @@ model DocumentChunk {
   pageNumber Int?
   chunkIndex Int
   text       String
+  embedding  String? // JSON-encoded float array (OpenAI text-embedding-3-small); null until embedded, and retrieval falls back to BM25 for chunks without one
   createdAt  DateTime @default(now())
 
   @@index([companyId])

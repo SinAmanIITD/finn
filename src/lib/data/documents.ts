@@ -1,5 +1,19 @@
 import { PDFParse } from "pdf-parse";
 import { db } from "@/lib/db";
+import { embedBatch, isEmbeddingConfigured } from "@/lib/ai/embeddings";
+
+const EMBED_BATCH_SIZE = 96;
+
+/** Embeds texts in batches; returns null per-text if no OpenAI key is configured, so BM25 still works. */
+async function embedTextsOrNull(texts: string[]): Promise<(string | null)[]> {
+  if (!isEmbeddingConfigured() || texts.length === 0) return texts.map(() => null);
+  const vectors: number[][] = [];
+  for (let i = 0; i < texts.length; i += EMBED_BATCH_SIZE) {
+    const batch = texts.slice(i, i + EMBED_BATCH_SIZE);
+    vectors.push(...(await embedBatch(batch)));
+  }
+  return vectors.map((v) => JSON.stringify(v));
+}
 
 type PageText = { num: number; text: string };
 
@@ -51,10 +65,11 @@ export async function ingestDocument(documentId: number): Promise<{ chunks: numb
     const buffer = await downloadPdf(doc.sourceUrl);
     const pages = await extractPdfPages(buffer);
     const chunks = chunkPages(pages);
+    const embeddings = await embedTextsOrNull(chunks.map((c) => c.text));
 
     await db.$transaction([
       db.documentChunk.deleteMany({ where: { documentId } }),
-      ...chunks.map((c) =>
+      ...chunks.map((c, i) =>
         db.documentChunk.create({
           data: {
             documentId,
@@ -62,6 +77,7 @@ export async function ingestDocument(documentId: number): Promise<{ chunks: numb
             pageNumber: c.pageNumber,
             chunkIndex: c.chunkIndex,
             text: c.text,
+            embedding: embeddings[i],
           },
         })
       ),
@@ -73,6 +89,25 @@ export async function ingestDocument(documentId: number): Promise<{ chunks: numb
     await db.document.update({ where: { id: documentId }, data: { status: "failed" } });
     throw e;
   }
+}
+
+/** Embeds any already-ingested chunks that predate OpenAI being configured. */
+export async function backfillMissingEmbeddings(): Promise<{ embedded: number }> {
+  if (!isEmbeddingConfigured()) return { embedded: 0 };
+
+  const missing = await db.documentChunk.findMany({ where: { embedding: null } });
+  let embedded = 0;
+  for (let i = 0; i < missing.length; i += EMBED_BATCH_SIZE) {
+    const batch = missing.slice(i, i + EMBED_BATCH_SIZE);
+    const vectors = await embedBatch(batch.map((c) => c.text));
+    await db.$transaction(
+      batch.map((c, j) =>
+        db.documentChunk.update({ where: { id: c.id }, data: { embedding: JSON.stringify(vectors[j]) } })
+      )
+    );
+    embedded += batch.length;
+  }
+  return { embedded };
 }
 
 export async function ingestAllPendingDocuments() {

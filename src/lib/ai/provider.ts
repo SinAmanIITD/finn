@@ -1,59 +1,99 @@
-import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 
-// Smart model routing: a cheap/fast model for high-volume, low-ambiguity work
-// (classification, short summaries), a stronger reasoning model only where it's
-// actually needed (research synthesis, guidance-vs-actuals, bull/bear). This is
-// the efficiency instinct the brief calls out explicitly.
-export const MODELS = {
-  cheap: "claude-haiku-5-5",
-  strong: "claude-sonnet-5-5",
-} as const;
+// Smart multi-provider model routing: Groq for high-volume, low-ambiguity work
+// (classification, short summaries) where its free/near-free fast inference is
+// plenty, and OpenAI for the reasoning-heavy work (research synthesis,
+// guidance-vs-actuals) where answer quality matters most. Both speak the
+// OpenAI-compatible chat-completions API, so one SDK covers both - only the
+// baseURL and API key differ. This is the "efficient model routing" the brief
+// calls out explicitly, just spread across providers instead of within one.
+export type ModelTier = "cheap" | "strong";
+export const MODELS: Record<ModelTier, ModelTier> = { cheap: "cheap", strong: "strong" };
 
-export function isAiConfigured(): boolean {
-  return Boolean(process.env.ANTHROPIC_API_KEY);
+type TierConfig = {
+  provider: "groq" | "openai";
+  model: string;
+  apiKeyEnv: "GROQ_API_KEY" | "OPENAI_API_KEY";
+  baseURL?: string;
+};
+
+// Model IDs are env-overridable: provider lineups move fast, and the right
+// current model name may differ from these defaults by the time this runs.
+const TIERS: Record<ModelTier, TierConfig> = {
+  cheap: {
+    provider: "groq",
+    model: process.env.GROQ_MODEL ?? "llama-3.1-8b-instant",
+    apiKeyEnv: "GROQ_API_KEY",
+    baseURL: "https://api.groq.com/openai/v1",
+  },
+  strong: {
+    provider: "openai",
+    model: process.env.OPENAI_MODEL ?? "gpt-4o",
+    apiKeyEnv: "OPENAI_API_KEY",
+  },
+};
+
+export function isAiConfigured(tier: ModelTier = "strong"): boolean {
+  return Boolean(process.env[TIERS[tier].apiKeyEnv]);
 }
 
-let client: Anthropic | null = null;
-function getClient(): Anthropic {
-  if (!client) client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+/** True if either provider is configured - matches complete()'s cross-tier fallback behaviour. */
+export function isAnyAiConfigured(): boolean {
+  return isAiConfigured("cheap") || isAiConfigured("strong");
+}
+
+const clients = new Map<ModelTier, OpenAI>();
+function getClient(tier: ModelTier): OpenAI {
+  let client = clients.get(tier);
+  if (!client) {
+    const cfg = TIERS[tier];
+    client = new OpenAI({ apiKey: process.env[cfg.apiKeyEnv], baseURL: cfg.baseURL });
+    clients.set(tier, client);
+  }
   return client;
 }
 
 export type CompleteResult = { text: string; demo: boolean; model: string };
 
 /**
- * Calls Claude with a system+user prompt. If no API key is configured, returns
- * a clearly-labelled demo-mode result instead of silently failing or faking a
- * confident answer — the brief is explicit that mock data must be labelled.
+ * Calls the configured model for a tier with a system+user prompt. If that
+ * tier's API key isn't set, returns a clearly-labelled demo-mode result
+ * instead of silently failing or faking a confident answer - the brief is
+ * explicit that mock output must be labelled.
  */
 export async function complete(params: {
   system: string;
   prompt: string;
-  model?: string;
+  model?: ModelTier;
   maxTokens?: number;
 }): Promise<CompleteResult> {
-  const model = params.model ?? MODELS.cheap;
-  if (!isAiConfigured()) {
+  const requested = params.model ?? "cheap";
+  // Graceful degradation: if the requested tier's key isn't set but the other
+  // one is, use that instead of dropping straight to demo mode - a single key
+  // (either provider) should still get you real output everywhere.
+  const other: ModelTier = requested === "cheap" ? "strong" : "cheap";
+  const tier = isAiConfigured(requested) ? requested : isAiConfigured(other) ? other : null;
+  if (!tier) {
     return { text: "", demo: true, model: "demo" };
   }
-  const res = await getClient().messages.create({
-    model,
+  const cfg = TIERS[tier];
+  const res = await getClient(tier).chat.completions.create({
+    model: cfg.model,
     max_tokens: params.maxTokens ?? 1024,
-    system: params.system,
-    messages: [{ role: "user", content: params.prompt }],
+    messages: [
+      { role: "system", content: params.system },
+      { role: "user", content: params.prompt },
+    ],
   });
-  const text = res.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("\n");
-  return { text, demo: false, model };
+  const text = res.choices[0]?.message?.content ?? "";
+  return { text, demo: false, model: `${cfg.provider}:${cfg.model}` };
 }
 
 /** Same as complete(), but parses the response as JSON with one repair retry. */
 export async function completeJSON<T>(params: {
   system: string;
   prompt: string;
-  model?: string;
+  model?: ModelTier;
   maxTokens?: number;
 }): Promise<{ data: T | null; demo: boolean; model: string; raw: string }> {
   const result = await complete({
@@ -69,7 +109,7 @@ export async function completeJSON<T>(params: {
   const repair = await complete({
     system: "You output ONLY valid JSON, nothing else.",
     prompt: `This was supposed to be valid JSON but failed to parse:\n\n${result.text}\n\nReturn the corrected, valid JSON only.`,
-    model: params.model ?? MODELS.cheap,
+    model: params.model ?? "cheap",
     maxTokens: params.maxTokens ?? 1024,
   });
   const repaired = tryParseJson<T>(repair.text);

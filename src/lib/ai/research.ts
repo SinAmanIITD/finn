@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { retrieveRelevantChunks } from "@/lib/ai/retrieval";
-import { complete, completeJSON, isAiConfigured, MODELS } from "@/lib/ai/provider";
+import { complete, completeJSON, isAnyAiConfigured, MODELS } from "@/lib/ai/provider";
 import { RESEARCH_SYSTEM, researchPrompt, GUIDANCE_VS_ACTUALS_SYSTEM } from "@/lib/ai/prompts";
 import { RESEARCH_SECTIONS, type ResearchSectionType } from "@/lib/data/researchSections";
 
@@ -42,11 +42,11 @@ export async function generateResearchSection(
     text: c.text,
   }));
 
-  if (!isAiConfigured()) {
+  if (!isAnyAiConfigured()) {
     return {
       sectionType,
       content:
-        `**Demo mode** (no ANTHROPIC_API_KEY set): ${chunks.length} relevant primary-source excerpts were ` +
+        `**Demo mode** (no GROQ_API_KEY or OPENAI_API_KEY set): ${chunks.length} relevant primary-source excerpts were ` +
         `retrieved for "${section.label}" but no LLM is configured to synthesise them into analysis. ` +
         `Raw evidence is listed in sourceRefs below. Add a key to .env to see the real analysis.`,
       sourceRefs: evidence.map((e) => ({ document: e.document, period: e.period, page: e.page })),
@@ -115,10 +115,10 @@ export async function answerQuestion(companyId: number, question: string): Promi
     text: c.text,
   }));
 
-  if (!isAiConfigured()) {
+  if (!isAnyAiConfigured()) {
     return {
       answer:
-        `**Demo mode** (no ANTHROPIC_API_KEY set): found ${chunks.length} relevant excerpts for "${question}" ` +
+        `**Demo mode** (no GROQ_API_KEY or OPENAI_API_KEY set): found ${chunks.length} relevant excerpts for "${question}" ` +
         `but no LLM is configured to answer from them. Add a key to .env to get a real answer.`,
       sources: evidence.map((e) => ({ document: e.document, period: e.period, page: e.page })),
       demo: true,
@@ -166,7 +166,7 @@ export async function generateGuidanceVsActuals(companyId: number): Promise<{
   const resultChunks = await retrieveRelevantChunks(companyId, "revenue EBITDA PAT margin actual results quarter", 8);
   const all = [...guidanceChunks, ...new Map(resultChunks.map((c) => [c.chunkId, c])).values()];
 
-  if (all.length === 0 || !isAiConfigured()) {
+  if (all.length === 0 || !isAnyAiConfigured()) {
     return { items: [], demo: true };
   }
 

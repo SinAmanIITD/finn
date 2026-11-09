@@ -1,11 +1,54 @@
 import { db } from "@/lib/db";
+import { embedOne, cosineSimilarity, isEmbeddingConfigured } from "@/lib/ai/embeddings";
 
-// Lightweight BM25 retrieval over a company's document chunks. We deliberately
-// skip a vector-embeddings pipeline for this narrow MVP - it would need a
-// second API key/service with no extra value at this scale (a handful of
-// documents per company). BM25 is a real, well-understood ranking function,
-// not a placeholder; swapping in pgvector + embeddings later is a drop-in
-// change to this one module. See README "Where I'd take it next".
+// Retrieval over a company's document chunks, with two engines:
+//   1. OpenAI embeddings + cosine similarity, when OPENAI_API_KEY is set and
+//      the chunks were embedded at ingestion time.
+//   2. A hand-rolled BM25 ranker as the fallback - real, well-understood, and
+//      what keeps the app fully functional with zero API keys configured.
+// This means retrieval quality upgrades automatically the moment an OpenAI
+// key is added, with no behaviour change required elsewhere in the app.
+
+export type ScoredChunk = {
+  chunkId: number;
+  documentId: number;
+  documentType: string;
+  period: string | null;
+  pageNumber: number | null;
+  text: string;
+  score: number;
+};
+
+export async function retrieveRelevantChunks(companyId: number, query: string, topK = 10): Promise<ScoredChunk[]> {
+  if (isEmbeddingConfigured()) {
+    const embedded = await retrieveByEmbedding(companyId, query, topK);
+    if (embedded.length > 0) return embedded;
+    // Falls through to BM25 if nothing's been embedded yet (e.g. ingested before a key was set).
+  }
+  return retrieveBM25(companyId, query, topK);
+}
+
+async function retrieveByEmbedding(companyId: number, query: string, topK: number): Promise<ScoredChunk[]> {
+  const chunks = await db.documentChunk.findMany({
+    where: { companyId, embedding: { not: null } },
+    include: { document: { select: { documentType: true, period: true } } },
+  });
+  if (chunks.length === 0) return [];
+
+  const queryVector = await embedOne(query);
+
+  const scored: ScoredChunk[] = chunks.map((c) => ({
+    chunkId: c.id,
+    documentId: c.documentId,
+    documentType: c.document.documentType,
+    period: c.document.period,
+    pageNumber: c.pageNumber,
+    text: c.text,
+    score: cosineSimilarity(queryVector, JSON.parse(c.embedding as string)),
+  }));
+
+  return scored.sort((a, b) => b.score - a.score).slice(0, topK);
+}
 
 const STOPWORDS = new Set([
   "the", "a", "an", "of", "and", "or", "to", "in", "on", "for", "is", "are", "was", "were",
@@ -21,25 +64,11 @@ function tokenize(text: string): string[] {
     .filter((t) => t.length > 1 && !STOPWORDS.has(t));
 }
 
-type ScoredChunk = {
-  chunkId: number;
-  documentId: number;
-  documentType: string;
-  period: string | null;
-  pageNumber: number | null;
-  text: string;
-  score: number;
-};
-
 const K1 = 1.5;
 const B = 0.75;
 
 /** BM25-ranks a company's document chunks against a free-text query. */
-export async function retrieveRelevantChunks(
-  companyId: number,
-  query: string,
-  topK = 10
-): Promise<ScoredChunk[]> {
+async function retrieveBM25(companyId: number, query: string, topK: number): Promise<ScoredChunk[]> {
   const chunks = await db.documentChunk.findMany({
     where: { companyId },
     include: { document: { select: { documentType: true, period: true } } },
