@@ -1,17 +1,24 @@
 // Thin client for NSE's public corporate-announcements API.
 // NSE fronts its site with Akamai bot protection: a plain API request gets
-// rejected unless it carries cookies issued by first loading nseindia.com in
-// a browser-like session. We replicate that handshake here (one GET to the
+// rejected unless it carries cookies issued by first loading the site in a
+// browser-like session. We replicate that handshake here (one GET to the
 // homepage to collect cookies, then the API call with those cookies attached)
 // — this is the standard, widely-documented way to use NSE's own public API
 // from a script, not a bypass of any paywall or private data.
+//
+// NSE migrated this API from nseindia.com to nseindia.in sometime after
+// this was first built (nseindia.com now 301s there) - verified it's the
+// same organization's real site, not a lookalike, before switching. The
+// .com redirect itself was also triggering an HTTP/2 stream error in
+// Node's fetch, so targeting .in directly sidesteps that too.
+const NSE_BASE = "https://www.nseindia.in";
 
 const BROWSER_HEADERS = {
   "User-Agent":
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
   Accept: "*/*",
   "Accept-Language": "en-US,en;q=0.9",
-  Referer: "https://www.nseindia.com/",
+  Referer: `${NSE_BASE}/`,
 };
 
 let cachedCookie: { value: string; fetchedAt: number } | null = null;
@@ -21,7 +28,7 @@ async function getSessionCookie(): Promise<string> {
   if (cachedCookie && Date.now() - cachedCookie.fetchedAt < COOKIE_TTL_MS) {
     return cachedCookie.value;
   }
-  const res = await fetch("https://www.nseindia.com/", { headers: BROWSER_HEADERS });
+  const res = await fetch(`${NSE_BASE}/`, { headers: BROWSER_HEADERS });
   const setCookie = res.headers.getSetCookie?.() ?? [];
   const cookie = setCookie.map((c) => c.split(";")[0]).join("; ");
   cachedCookie = { value: cookie, fetchedAt: Date.now() };
@@ -73,7 +80,7 @@ async function fetchOnce(symbol: string, windowDays: number, forceFreshCookie: b
   const toDate = new Date();
   const fromDate = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
   const url =
-    `https://www.nseindia.com/api/corporate-announcements?index=equities&symbol=${encodeURIComponent(symbol)}` +
+    `${NSE_BASE}/api/corporate-announcements?index=equities&symbol=${encodeURIComponent(symbol)}` +
     `&from_date=${formatNseDate(fromDate)}&to_date=${formatNseDate(toDate)}`;
   const res = await fetch(url, { headers: { ...BROWSER_HEADERS, Cookie: cookie } });
   if (!res.ok) {
