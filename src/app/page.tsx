@@ -83,7 +83,7 @@ export default function HomePage() {
                 className="h-16 w-28 shrink-0 rounded-xl border border-border bg-surface px-3 py-2 flex flex-col justify-between active:scale-95 transition-transform"
               >
                 <span className="text-xs font-semibold">{c.ticker}</span>
-                <PriceChip close={c.price?.close} changePct={c.price?.changePct} />
+                <PriceChip close={c.price?.close} changePct={c.price?.changePct} compact />
               </Link>
             ))}
       </div>
